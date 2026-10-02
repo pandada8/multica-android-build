@@ -1,0 +1,764 @@
+diff --git a/apps/mobile/AGENTS.md b/apps/mobile/AGENTS.md
+index de096ef32..7eb71475a 100644
+--- a/apps/mobile/AGENTS.md
++++ b/apps/mobile/AGENTS.md
+@@ -92,3 +92,8 @@ pnpm --filter @multica/mobile test
+ - For UI changes, verify the affected flow in the simulator/device, including themes, keyboard/scrolling, and navigation. For shared semantics or realtime changes, change the same data from web and confirm mobile catches up without manual refresh, including after reconnect.
+ - Test parsing/transforms in the existing Vitest setup. Preserve `scripts/ios-run.test.sh` coverage when changing the native build wrapper.
+ - Report which checks ran and which native/cross-client checks were unavailable. Do not claim visual or release verification from typecheck/unit tests alone.
++
++## Downstream server selection
++
++- `ServerGate` must stay outside `AuthInitializer`: no auth/network consumers mount before the user chooses a server.
++- Server changes go through `data/server-settings.ts`, which clears credentials and caches before updating the live endpoints. Do not capture API/site URLs at module initialization.
+diff --git a/apps/mobile/app.config.ts b/apps/mobile/app.config.ts
+index 77765df85..be5b3c37f 100644
+--- a/apps/mobile/app.config.ts
++++ b/apps/mobile/app.config.ts
+@@ -88,9 +88,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
+         "expo-build-properties",
+         {
+           android: {
+-            usesCleartextTraffic: /^http:/i.test(
+-              process.env.EXPO_PUBLIC_API_URL?.trim() ?? "",
+-            ),
++            // The server is chosen at startup and may be a LAN HTTP endpoint.
++            usesCleartextTraffic: true,
+           },
+           ios: {
+             buildReactNativeFromSource: true,
+diff --git a/apps/mobile/app/(auth)/login.tsx b/apps/mobile/app/(auth)/login.tsx
+index d6c7d0e3a..affdf589c 100644
+--- a/apps/mobile/app/(auth)/login.tsx
++++ b/apps/mobile/app/(auth)/login.tsx
+@@ -1,3 +1,4 @@
++import { useServerSettings } from "@/components/auth/server-gate";
+ import { useState } from "react";
+ import { KeyboardAvoidingView, Platform, View } from "react-native";
+ import { SafeAreaView } from "react-native-safe-area-context";
+@@ -13,6 +14,8 @@ import { mapAuthError } from "@/lib/auth-error";
+ 
+ export default function Login() {
+   const { t } = useT("auth");
++  const openServerSettings = useServerSettings();
++  const authLoading = useAuthStore((s) => s.isLoading);
+   const sendCode = useAuthStore((s) => s.sendCode);
+   const [email, setEmail] = useState("");
+   const [submitting, setSubmitting] = useState(false);
+@@ -29,7 +32,11 @@ export default function Login() {
+       router.push({ pathname: "/verify", params: { email: trimmed } });
+     } catch (err) {
+       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+-      setError(mapAuthError(err, t("login.send_failed"), (key) => i18n.t(`auth:${key}`)));
++      setError(
++        mapAuthError(err, t("login.send_failed"), (key) =>
++          i18n.t(`auth:${key}`),
++        ),
++      );
+     } finally {
+       setSubmitting(false);
+     }
+@@ -78,7 +85,16 @@ export default function Login() {
+             disabled={submitting || !email.trim()}
+             onPress={onSubmit}
+           >
+-            <Text>{submitting ? t("login.sending") : t("login.send_code")}</Text>
++            <Text>
++              {submitting ? t("login.sending") : t("login.send_code")}
++            </Text>
++          </Button>
++          <Button
++            variant="ghost"
++            disabled={submitting || authLoading}
++            onPress={openServerSettings}
++          >
++            <Text>{t("server.change")}</Text>
+           </Button>
+         </View>
+       </KeyboardAvoidingView>
+diff --git a/apps/mobile/app/_layout.tsx b/apps/mobile/app/_layout.tsx
+index b24f161ae..eb0d5bfc0 100644
+--- a/apps/mobile/app/_layout.tsx
++++ b/apps/mobile/app/_layout.tsx
+@@ -1,3 +1,4 @@
++import { ServerGate } from "@/components/auth/server-gate";
+ import { AndroidActionSheetHost } from "@/lib/action-sheet";
+ import "../global.css";
+ 
+@@ -68,9 +69,12 @@ function AuthInitializer({ children }: { children: React.ReactNode }) {
+   // not a timer: a backgrounded or untouched app must not keep the session of
+   // someone who stopped using it alive.
+   useEffect(() => {
+-    const sub = AppState.addEventListener("change", (status: AppStateStatus) => {
+-      if (status === "active") maybeRenewSession();
+-    });
++    const sub = AppState.addEventListener(
++      "change",
++      (status: AppStateStatus) => {
++        if (status === "active") maybeRenewSession();
++      },
++    );
+     return () => sub.remove();
+   }, []);
+ 
+@@ -86,20 +90,22 @@ export default function RootLayout() {
+           <KeyboardProvider>
+             <QueryClientProvider client={queryClient}>
+               <ThemeProvider value={NAV_THEME[colorScheme]}>
+-                <AuthInitializer>
+-                  <SessionActivityBoundary>
+-                    <LightboxProvider>
+-                      <StatusBar style={isDarkColorScheme ? "light" : "dark"} />
+-                      <Stack screenOptions={{ headerShown: false }}>
+-                        <Stack.Screen name="index" />
+-                        <Stack.Screen name="(auth)" />
+-                        <Stack.Screen name="(app)" />
+-                      </Stack>
+-                      <PortalHost />
+-                      <AndroidActionSheetHost />
+-                    </LightboxProvider>
+-                  </SessionActivityBoundary>
+-                </AuthInitializer>
++                <StatusBar style={isDarkColorScheme ? "light" : "dark"} />
++                <ServerGate>
++                  <AuthInitializer>
++                    <SessionActivityBoundary>
++                      <LightboxProvider>
++                        <Stack screenOptions={{ headerShown: false }}>
++                          <Stack.Screen name="index" />
++                          <Stack.Screen name="(auth)" />
++                          <Stack.Screen name="(app)" />
++                        </Stack>
++                        <PortalHost />
++                        <AndroidActionSheetHost />
++                      </LightboxProvider>
++                    </SessionActivityBoundary>
++                  </AuthInitializer>
++                </ServerGate>
+               </ThemeProvider>
+             </QueryClientProvider>
+           </KeyboardProvider>
+diff --git a/apps/mobile/components/auth/server-gate.tsx b/apps/mobile/components/auth/server-gate.tsx
+new file mode 100644
+index 000000000..ba63b82ca
+--- /dev/null
++++ b/apps/mobile/components/auth/server-gate.tsx
+@@ -0,0 +1,166 @@
++import {
++  createContext,
++  useContext,
++  useEffect,
++  useRef,
++  useState,
++  type ReactNode,
++} from "react";
++import { KeyboardAvoidingView, Platform, ScrollView, View } from "react-native";
++import { SafeAreaView } from "react-native-safe-area-context";
++import { Text } from "@/components/ui/text";
++import { TextField } from "@/components/ui/text-field";
++import { Button } from "@/components/ui/button";
++import { MulticaLogo } from "@/components/brand/multica-logo";
++import { useT } from "@/lib/i18n";
++import {
++  DEFAULT_SERVER_CONFIG,
++  normalizeServerConfig,
++} from "@/lib/server-config";
++import { connectServer, loadServerSettings } from "@/data/server-settings";
++
++const ServerSettingsContext = createContext(() => {});
++export const useServerSettings = () => useContext(ServerSettingsContext);
++
++export function ServerGate({ children }: { children: ReactNode }) {
++  const { t } = useT("auth");
++  const [ready, setReady] = useState(false);
++  const [loaded, setLoaded] = useState(false);
++  const [busy, setBusy] = useState(false);
++  const submitting = useRef(false);
++  const [apiUrl, setApiUrl] = useState(DEFAULT_SERVER_CONFIG.apiUrl);
++  const [siteUrl, setSiteUrl] = useState(DEFAULT_SERVER_CONFIG.siteUrl);
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    let active = true;
++    void loadServerSettings()
++      .then((saved) => {
++        if (!active) return;
++        if (saved) {
++          setApiUrl(saved.apiUrl);
++          setSiteUrl(saved.siteUrl);
++        }
++      })
++      .catch(() => {
++        if (active) setError(t("server.storage_error"));
++      })
++      .finally(() => {
++        if (active) setLoaded(true);
++      });
++    return () => {
++      active = false;
++    };
++  }, [t]);
++
++  const connect = async () => {
++    if (!loaded || submitting.current) return;
++    let next;
++    try {
++      next = normalizeServerConfig({ apiUrl, siteUrl });
++    } catch {
++      setError(t("server.invalid_url"));
++      return;
++    }
++    submitting.current = true;
++    setBusy(true);
++    setError(null);
++    try {
++      await connectServer(next);
++      setApiUrl(next.apiUrl);
++      setSiteUrl(next.siteUrl);
++      setReady(true);
++    } catch {
++      setError(t("server.storage_error"));
++    } finally {
++      submitting.current = false;
++      setBusy(false);
++    }
++  };
++
++  return (
++    <ServerSettingsContext.Provider value={() => setReady(false)}>
++      {ready ? (
++        children
++      ) : (
++        <SafeAreaView className="flex-1 bg-background">
++          <KeyboardAvoidingView
++            className="flex-1"
++            behavior={Platform.OS === "ios" ? "padding" : undefined}
++          >
++            <ScrollView
++              keyboardShouldPersistTaps="handled"
++              contentContainerStyle={{
++                flexGrow: 1,
++                justifyContent: "center",
++                padding: 24,
++              }}
++            >
++              <View className="gap-6">
++                <View className="items-center gap-3">
++                  <MulticaLogo size={32} />
++                  <Text className="text-2xl font-semibold">
++                    {t("server.title")}
++                  </Text>
++                </View>
++                <View className="gap-2">
++                  <Text>{t("server.api_url")}</Text>
++                  <TextField
++                    accessibilityLabel={t("server.api_url")}
++                    value={apiUrl}
++                    onChangeText={setApiUrl}
++                    autoCapitalize="none"
++                    autoCorrect={false}
++                    keyboardType="url"
++                    editable={loaded && !busy}
++                  />
++                </View>
++                <View className="gap-2">
++                  <Text>{t("server.site_url")}</Text>
++                  <TextField
++                    accessibilityLabel={t("server.site_url")}
++                    value={siteUrl}
++                    onChangeText={setSiteUrl}
++                    autoCapitalize="none"
++                    autoCorrect={false}
++                    keyboardType="url"
++                    editable={loaded && !busy}
++                    onSubmitEditing={connect}
++                    returnKeyType="go"
++                  />
++                </View>
++                <Text className="text-sm text-muted-foreground">
++                  {t("server.session_notice")}
++                </Text>
++                {/^http:/i.test(apiUrl.trim()) ? (
++                  <Text className="text-sm text-muted-foreground">
++                    {t("server.http_notice")}
++                  </Text>
++                ) : null}
++                {error ? (
++                  <Text
++                    accessibilityRole="alert"
++                    className="text-sm text-destructive"
++                  >
++                    {error}
++                  </Text>
++                ) : null}
++                <Button
++                  size="lg"
++                  disabled={
++                    !loaded || busy || !apiUrl.trim() || !siteUrl.trim()
++                  }
++                  onPress={connect}
++                >
++                  <Text>
++                    {busy ? t("server.saving") : t("server.continue")}
++                  </Text>
++                </Button>
++              </View>
++            </ScrollView>
++          </KeyboardAvoidingView>
++        </SafeAreaView>
++      )}
++    </ServerSettingsContext.Provider>
++  );
++}
+diff --git a/apps/mobile/data/api.test.ts b/apps/mobile/data/api.test.ts
+index 9f460a4d2..bd82f46ee 100644
+--- a/apps/mobile/data/api.test.ts
++++ b/apps/mobile/data/api.test.ts
+@@ -1,6 +1,7 @@
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ import { api } from "./api";
++vi.mock("react-native", () => ({ Platform: { OS: "android" } }));
+ 
+ // api.ts refuses to load without a base URL; set it before the import runs.
+ vi.hoisted(() => {
+@@ -39,3 +40,20 @@ describe("api.deleteComment", () => {
+     expect(fetchMock).toHaveBeenCalledWith(url, expect.objectContaining({ method: "DELETE" }));
+   });
+ });
++
++describe("runtime server selection", () => {
++  it("uses the selected API even when the client was imported before selection", async () => {
++    const config = await import("@/lib/server-config");
++    const previous = { apiUrl: config.API_URL, siteUrl: config.SITE_URL };
++    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
++    vi.stubGlobal("fetch", fetchMock);
++    try {
++      config.setServerConfig({ apiUrl: "https://selected.example.test/", siteUrl: "https://site.example.test/" });
++      await api.deleteComment("comment-1");
++      expect(fetchMock).toHaveBeenCalledWith("https://selected.example.test/api/comments/comment-1", expect.anything());
++    } finally {
++      config.setServerConfig(previous);
++      vi.unstubAllGlobals();
++    }
++  });
++});
+diff --git a/apps/mobile/data/api.ts b/apps/mobile/data/api.ts
+index aa758bc80..8ccc321ac 100644
+--- a/apps/mobile/data/api.ts
++++ b/apps/mobile/data/api.ts
+@@ -1,3 +1,4 @@
++import { Platform } from "react-native";
+ /**
+  * Mobile-owned fetch wrapper. Mirrors the surface area of
+  * packages/core/api/client.ts that mobile actually uses, but lives in
+@@ -217,7 +218,7 @@ class ApiClient {
+     const headers: Record<string, string> = {
+       "Content-Type": "application/json",
+       "X-Client-Platform": "mobile",
+-      "X-Client-OS": "ios",
++      "X-Client-OS": Platform.OS,
+       "X-Client-Version": "0.1.0",
+       "X-Request-ID": rid,
+       ...((init.headers as Record<string, string>) ?? {}),
+@@ -1309,7 +1310,7 @@ class ApiClient {
+     const headers: Record<string, string> = {
+       // No Content-Type — let fetch set the multipart boundary.
+       "X-Client-Platform": "mobile",
+-      "X-Client-OS": "ios",
++      "X-Client-OS": Platform.OS,
+       "X-Client-Version": "0.1.0",
+       "X-Request-ID": rid,
+     };
+diff --git a/apps/mobile/data/realtime/realtime-provider.test.ts b/apps/mobile/data/realtime/realtime-provider.test.ts
+index 28dc0fcf3..d959b8a11 100644
+--- a/apps/mobile/data/realtime/realtime-provider.test.ts
++++ b/apps/mobile/data/realtime/realtime-provider.test.ts
+@@ -13,6 +13,7 @@ vi.mock("react", async (importOriginal) => ({
+   useState: () => [null, vi.fn()],
+ }));
+ vi.mock("react-native", () => ({
++  Platform: { OS: "android" },
+   AppState: {
+     addEventListener: (_event: string, handler: (state: string) => void) => {
+       lifecycle.onAppState = handler;
+@@ -31,7 +32,7 @@ vi.mock("@/data/api", () => ({ api: { getToken: () => "token" } }));
+ // Run the provider's effect and its actual WSClient, without rendering RN.
+ class MockWebSocket {
+   static instances: MockWebSocket[] = [];
+-  constructor() { MockWebSocket.instances.push(this); }
++  constructor(public url: string) { MockWebSocket.instances.push(this); }
+   close() {}
+ }
+ 
+@@ -74,4 +75,18 @@ describe("RealtimeProvider foreground recovery", () => {
+     lifecycle.onAppState!("active");
+     expect(MockWebSocket.instances).toHaveLength(3);
+   });
++  it("reads the selected API when connecting, not when the module loads", async () => {
++    const { RealtimeProvider } = await import("./realtime-provider");
++    const config = await import("@/lib/server-config");
++    const previous = { apiUrl: config.API_URL, siteUrl: config.SITE_URL };
++    try {
++      config.setServerConfig({ apiUrl: "http://selected.example.test:8080", siteUrl: "https://site.example.test" });
++      RealtimeProvider({ children: null });
++      cleanup = lifecycle.setup!();
++      await Promise.resolve();
++      expect(new URL(MockWebSocket.instances[0].url).searchParams.get("client_os")).toBe("android");
++      expect(MockWebSocket.instances[0].url).toMatch(/^ws:\/\/selected\.example\.test:8080\/ws/);
++    } finally { config.setServerConfig(previous); }
++  });
++
+ });
+diff --git a/apps/mobile/data/realtime/realtime-provider.tsx b/apps/mobile/data/realtime/realtime-provider.tsx
+index 3cbc50255..13111619b 100644
+--- a/apps/mobile/data/realtime/realtime-provider.tsx
++++ b/apps/mobile/data/realtime/realtime-provider.tsx
+@@ -34,7 +34,7 @@ import {
+   useRef,
+   useState,
+ } from "react";
+-import { AppState, type AppStateStatus } from "react-native";
++import { AppState, Platform, type AppStateStatus } from "react-native";
+ import NetInfo from "@react-native-community/netinfo";
+ import { useAuthStore } from "@/data/auth-store";
+ import { useWorkspaceStore } from "@/data/workspace-store";
+@@ -44,8 +44,6 @@ import { WSClient } from "./ws-client";
+ 
+ import { API_URL } from "@/lib/server-config";
+ 
+-// http(s)://host → ws(s)://host/ws
+-const WS_URL = `${API_URL.replace(/^http/, "ws")}/ws`;
+ 
+ const RealtimeContext = createContext<WSClient | null>(null);
+ 
+@@ -82,7 +80,8 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
+       if (cancelled || !token) return;
+ 
+       ws = new WSClient({
+-        url: WS_URL,
++        clientOS: Platform.OS,
++        url: `${API_URL.replace(/^http/, "ws")}/ws`,
+         token,
+         // Re-read per connection rather than reusing the token captured
+         // above: a session renewed since this effect ran would otherwise keep
+diff --git a/apps/mobile/data/realtime/ws-client.test.ts b/apps/mobile/data/realtime/ws-client.test.ts
+index 3d121061b..276f2aaa2 100644
+--- a/apps/mobile/data/realtime/ws-client.test.ts
++++ b/apps/mobile/data/realtime/ws-client.test.ts
+@@ -41,6 +41,7 @@ class MockWebSocket {
+ 
+ function connectAuthenticatedClient() {
+   const client = new WSClient({
++    clientOS: "android",
+     url: "wss://example.test/ws",
+     token: "token",
+     workspaceSlug: "workspace",
+@@ -110,6 +111,7 @@ describe("WSClient session renewal", () => {
+   it("authenticates each connection with the current token", () => {
+     let current = "token-v1";
+     const client = new WSClient({
++    clientOS: "android",
+       url: "wss://example.test/ws",
+       token: "token-v1",
+       workspaceSlug: "workspace",
+@@ -136,6 +138,7 @@ describe("WSClient session renewal", () => {
+ 
+   it("falls back to the constructor token when no reader is supplied", () => {
+     const client = new WSClient({
++    clientOS: "android",
+       url: "wss://example.test/ws",
+       token: "token-only",
+       workspaceSlug: "workspace",
+diff --git a/apps/mobile/data/realtime/ws-client.ts b/apps/mobile/data/realtime/ws-client.ts
+index 650dd8637..c1d9babfa 100644
+--- a/apps/mobile/data/realtime/ws-client.ts
++++ b/apps/mobile/data/realtime/ws-client.ts
+@@ -48,6 +48,7 @@ const noopLogger: Logger = {
+ };
+ 
+ export interface WSClientOptions {
++  clientOS: string;
+   /** wss://host/ws — no query params; the client appends them. */
+   url: string;
+   /** Bearer token sent as the first frame. */
+@@ -204,7 +205,7 @@ export class WSClient {
+     const url = new URL(this.opts.url);
+     url.searchParams.set("workspace_slug", this.opts.workspaceSlug);
+     url.searchParams.set("client_platform", "mobile");
+-    url.searchParams.set("client_os", "ios");
++    url.searchParams.set("client_os", this.opts.clientOS);
+     if (this.opts.clientVersion) {
+       url.searchParams.set("client_version", this.opts.clientVersion);
+     }
+diff --git a/apps/mobile/data/server-settings.test.ts b/apps/mobile/data/server-settings.test.ts
+new file mode 100644
+index 000000000..01d21c226
+--- /dev/null
++++ b/apps/mobile/data/server-settings.test.ts
+@@ -0,0 +1,117 @@
++// @vitest-environment node
++import { beforeEach, describe, expect, it, vi } from "vitest";
++
++const mocks = vi.hoisted(() => {
++  process.env.EXPO_PUBLIC_API_URL = "https://old.example.test";
++  process.env.EXPO_PUBLIC_WEB_URL = "https://old-site.example.test";
++  return {
++    get: vi.fn(),
++    save: vi.fn(),
++    logout: vi.fn(),
++    clearWorkspace: vi.fn(),
++    cancelQueries: vi.fn(),
++    clearQueries: vi.fn(),
++  };
++});
++vi.mock("expo-secure-store", () => ({
++  getItemAsync: mocks.get,
++  setItemAsync: mocks.save,
++}));
++vi.mock("./auth-store", () => ({
++  useAuthStore: {
++    setState: vi.fn(),
++    getState: () => ({ logout: mocks.logout }),
++  },
++}));
++vi.mock("./workspace-store", () => ({
++  useWorkspaceStore: { getState: () => ({ clear: mocks.clearWorkspace }) },
++}));
++vi.mock("./query-client", () => ({
++  queryClient: {
++    cancelQueries: mocks.cancelQueries,
++    clear: mocks.clearQueries,
++  },
++}));
++import { connectServer, loadServerSettings } from "./server-settings";
++import { API_URL, SITE_URL, setServerConfig } from "@/lib/server-config";
++const old = {
++  apiUrl: "https://old.example.test",
++  siteUrl: "https://old-site.example.test",
++};
++const next = {
++  apiUrl: "http://192.168.1.2:8080",
++  siteUrl: "https://site.example.test",
++};
++beforeEach(() => {
++  vi.resetAllMocks();
++  mocks.get.mockResolvedValue(JSON.stringify(old));
++  setServerConfig(old);
++});
++describe("startup server selection", () => {
++  it("clears the old session before persisting or enabling a new server", async () => {
++    const order: string[] = [];
++    mocks.logout.mockImplementation(async () => {
++      expect(API_URL).toBe(old.apiUrl);
++      order.push("logout");
++    });
++    mocks.clearWorkspace.mockImplementation(async () => {
++      order.push("workspace");
++    });
++    mocks.cancelQueries.mockImplementation(async () => {
++      order.push("cancel");
++    });
++    mocks.clearQueries.mockImplementation(() => {
++      order.push("cache");
++    });
++    mocks.save.mockImplementation(async () => {
++      expect(API_URL).toBe(old.apiUrl);
++      order.push("save");
++    });
++    await connectServer(next);
++    expect(order).toEqual(["logout", "workspace", "cancel", "cache", "save"]);
++    expect(API_URL).toBe(next.apiUrl);
++    expect(SITE_URL).toBe(next.siteUrl);
++    expect(mocks.save).toHaveBeenCalledWith(
++      "multica_server_config",
++      JSON.stringify(next),
++    );
++  });
++  it("preserves the session when reopening the same normalized server", async () => {
++    await connectServer({
++      apiUrl: old.apiUrl + "/",
++      siteUrl: old.siteUrl + "/",
++    });
++    expect(mocks.logout).not.toHaveBeenCalled();
++  });
++  it.each([
++    null,
++    "bad json",
++    JSON.stringify({ apiUrl: "javascript:bad", siteUrl: old.siteUrl }),
++  ])(
++    "discards unbound sessions for missing/corrupt settings %s",
++    async (saved) => {
++      mocks.get.mockResolvedValue(saved);
++      expect(await loadServerSettings()).toBeNull();
++      await connectServer(next);
++      expect(mocks.logout).toHaveBeenCalledOnce();
++    },
++  );
++  it("does not switch endpoints when credential deletion fails", async () => {
++    mocks.logout.mockRejectedValue(new Error("secure store unavailable"));
++    await expect(connectServer(next)).rejects.toThrow();
++    expect(API_URL).toBe(old.apiUrl);
++    expect(mocks.save).not.toHaveBeenCalled();
++  });
++  it("does not switch endpoints when saving fails", async () => {
++    mocks.save.mockRejectedValue(new Error("disk full"));
++    await expect(connectServer(next)).rejects.toThrow();
++    expect(API_URL).toBe(old.apiUrl);
++  });
++  it("rejects invalid input before touching the saved session", async () => {
++    await expect(
++      connectServer({ ...next, apiUrl: "file:///bad" }),
++    ).rejects.toThrow();
++    expect(mocks.logout).not.toHaveBeenCalled();
++    expect(mocks.save).not.toHaveBeenCalled();
++  });
++});
+diff --git a/apps/mobile/data/server-settings.ts b/apps/mobile/data/server-settings.ts
+new file mode 100644
+index 000000000..3b4c66ddb
+--- /dev/null
++++ b/apps/mobile/data/server-settings.ts
+@@ -0,0 +1,40 @@
++import * as SecureStore from "expo-secure-store";
++import {
++  normalizeServerConfig,
++  setServerConfig,
++  type ServerConfig,
++} from "@/lib/server-config";
++import { useAuthStore } from "./auth-store";
++import { useWorkspaceStore } from "./workspace-store";
++import { queryClient } from "./query-client";
++
++const KEY = "multica_server_config";
++export async function loadServerSettings(): Promise<ServerConfig | null> {
++  const raw = await SecureStore.getItemAsync(KEY);
++  if (!raw) return null;
++  try {
++    return normalizeServerConfig(JSON.parse(raw));
++  } catch {
++    return null;
++  }
++}
++
++/** No app/auth providers are mounted until this transaction succeeds. */
++export async function connectServer(value: ServerConfig): Promise<void> {
++  const next = normalizeServerConfig(value);
++  const previous = await loadServerSettings();
++  // An unbound (pre-settings) token must never be forwarded to a new host.
++  if (
++    !previous ||
++    previous.apiUrl !== next.apiUrl ||
++    previous.siteUrl !== next.siteUrl
++  ) {
++    await useAuthStore.getState().logout();
++    await useWorkspaceStore.getState().clear();
++    await queryClient.cancelQueries();
++    queryClient.clear();
++  }
++  await SecureStore.setItemAsync(KEY, JSON.stringify(next));
++  setServerConfig(next);
++  useAuthStore.setState({ isLoading: true });
++}
+diff --git a/apps/mobile/lib/server-config.ts b/apps/mobile/lib/server-config.ts
+index a7f6cd234..e8392085d 100644
+--- a/apps/mobile/lib/server-config.ts
++++ b/apps/mobile/lib/server-config.ts
+@@ -1,4 +1,4 @@
+-/** Build-time endpoints shared by HTTP, WebSocket, attachments and site links. */
++/** Live endpoints shared by HTTP, WebSocket, attachments and site links. */
+ function endpoint(value: string | undefined, name: string): string {
+   if (!value) throw new Error(`${name} is required`);
+   const url = new URL(value);
+@@ -16,11 +16,44 @@ function endpoint(value: string | undefined, name: string): string {
+   return url.toString().replace(/\/+$/, "");
+ }
+ 
+-export const API_URL = endpoint(
++export let API_URL = endpoint(
+   process.env.EXPO_PUBLIC_API_URL,
+   "EXPO_PUBLIC_API_URL",
+ );
+-export const SITE_URL = endpoint(
++export let SITE_URL = endpoint(
+   process.env.EXPO_PUBLIC_WEB_URL,
+   "EXPO_PUBLIC_WEB_URL",
+ );
++
++export interface ServerConfig {
++  apiUrl: string;
++  siteUrl: string;
++}
++export const DEFAULT_SERVER_CONFIG: Readonly<ServerConfig> = Object.freeze({
++  apiUrl: API_URL,
++  siteUrl: SITE_URL,
++});
++
++export function normalizeServerConfig(value: unknown): ServerConfig {
++  if (
++    !value ||
++    typeof value !== "object" ||
++    !("apiUrl" in value) ||
++    !("siteUrl" in value) ||
++    typeof value.apiUrl !== "string" ||
++    typeof value.siteUrl !== "string"
++  ) {
++    throw new Error("Invalid server configuration");
++  }
++  return {
++    apiUrl: endpoint(value.apiUrl.trim(), "API URL"),
++    siteUrl: endpoint(value.siteUrl.trim(), "Site URL"),
++  };
++}
++
++/** Called only while the startup gate has unmounted all authenticated consumers. */
++export function setServerConfig(value: ServerConfig): void {
++  const next = normalizeServerConfig(value);
++  API_URL = next.apiUrl;
++  SITE_URL = next.siteUrl;
++}
+diff --git a/apps/mobile/locales/en/auth.json b/apps/mobile/locales/en/auth.json
+index c4e408ba2..0945ed7ac 100644
+--- a/apps/mobile/locales/en/auth.json
++++ b/apps/mobile/locales/en/auth.json
+@@ -31,5 +31,17 @@
+   },
+   "errors": {
+     "sign_in_failed": "Sign-in failed. Try again."
++  },
++  "server": {
++    "title": "Connect to Multica",
++    "api_url": "API URL",
++    "site_url": "Multica site URL",
++    "continue": "Continue",
++    "saving": "Saving...",
++    "change": "Change server",
++    "invalid_url": "Enter valid HTTP(S) URLs without credentials, query parameters or fragments.",
++    "storage_error": "Could not read or save server settings. Try again.",
++    "session_notice": "Changing the server signs you out. Your last addresses are saved on this device.",
++    "http_notice": "HTTP sends credentials and data without encryption. Use only on a trusted network."
+   }
+ }
+diff --git a/apps/mobile/locales/zh-Hans/auth.json b/apps/mobile/locales/zh-Hans/auth.json
+index 72b80817b..b843be4c9 100644
+--- a/apps/mobile/locales/zh-Hans/auth.json
++++ b/apps/mobile/locales/zh-Hans/auth.json
+@@ -33,5 +33,17 @@
+     "sign_in_failed": "登录失败，请重试。"
+   },
+   "login.invalid_email": "请输入有效的邮箱地址",
+-  "verify.expired": "验证码已过期，请点按重新发送。"
++  "verify.expired": "验证码已过期，请点按重新发送。",
++  "server": {
++    "title": "连接 Multica",
++    "api_url": "API URL",
++    "site_url": "Multica 站点 URL",
++    "continue": "继续",
++    "saving": "保存中...",
++    "change": "更换服务器",
++    "invalid_url": "请输入有效的 HTTP(S) 地址，不要包含账号密码、查询参数或片段。",
++    "storage_error": "无法读取或保存服务器设置，请重试。",
++    "session_notice": "更换服务器会退出登录。上次使用的地址会保存在此设备上。",
++    "http_notice": "HTTP 不会加密凭据和数据，请仅在可信网络中使用。"
++  }
+ }

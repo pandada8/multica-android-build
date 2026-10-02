@@ -2,7 +2,15 @@
 
 基于固定版本的 [Multica](https://github.com/multica-ai/multica) 源码构建可直接安装、无需 Metro 的 Android APK。所有上游修改维护在 `patches/`，构建前按文件名顺序 `git apply`；不提交生成的 Android 工程。
 
+## 启动时配置服务器
+
+每次冷启动先显示服务器配置页，可以输入 **API URL** 和 **Multica 站点 URL**，点击“继续”后才启动登录、API 请求及 WebSocket。地址保存在设备的 SecureStore 中，下次启动自动填入；登录页也提供“更换服务器”入口。
+
+同一服务器保留登录。更换任一地址时先清除旧 token、工作区及查询缓存，随后才启用新地址，避免把旧凭据发送到新服务器。首次升级到这套配置时会重新登录一次。地址支持 HTTP/HTTPS，拒绝账号密码、查询参数、fragment 和空地址，并规范化尾斜杠。为了支持启动时选择局域网 HTTP 服务，Android APK 允许明文流量，选择 HTTP API 时界面会显示提示。英文和简体中文界面均已适配。
+
 ## GitHub Actions
+
+环境和缓存复用现成的 [android-actions/setup-android](https://github.com/android-actions/setup-android)、[gradle/actions/setup-gradle](https://github.com/gradle/actions/blob/main/docs/setup-gradle.md)，并使用官方 checkout、Node、Java 和 artifact actions。项目脚本只负责补丁、Expo prebuild 和 Gradle wrapper 构建；无需 EAS 账号或云构建服务。
 
 把本仓库推送到 GitHub 的 `main` 或 `master` 后，push、PR 和手动运行 `Android APK` workflow 都会构建。完成后在 Actions 页面下载 `multica-android-<run_number>` artifact，里面包含 APK、SHA-256 和构建配置记录。
 
@@ -14,7 +22,7 @@
 | `MULTICA_SITE_URL` | `https://multica.ai` | 分享、复制和打开网页使用的站点地址 |
 | `ANDROID_PACKAGE` | `ai.multica.mobile.android` | Android application ID |
 
-手动运行时可以覆盖这三个值。地址支持 HTTP/HTTPS，不包含账号密码、查询参数或 fragment；结尾斜杠会被去掉。配置 HTTP API 时，Android 构建会开启明文网络访问以支持局域网自建服务；其他构建保持关闭。API 和站点地址可以不同，都会编译进 APK，**不是秘密，也不能在安装后修改**；改地址后需重新构建。这里的 site URL 对应上游变量 `EXPO_PUBLIC_WEB_URL`。设置 `EXPO_NO_DOTENV=1`，避免上游 `.env.production` 覆盖定制配置。
+手动运行时可以覆盖这三个值。API/site 变量只决定首次启动时的默认地址，**安装后可直接在启动界面修改，无需重新构建**。Android application ID 仍是构建配置。这里的 site URL 对应上游变量 `EXPO_PUBLIC_WEB_URL`。设置 `EXPO_NO_DOTENV=1`，避免上游 `.env.production` 覆盖默认配置。
 
 上游当前为公开仓库，无需额外 token。若改为私有 fork，设置只具备该仓库读取权限的 `UPSTREAM_READ_TOKEN` secret；fork PR 无法读取这个 secret。
 
@@ -58,6 +66,7 @@ scripts/build-android.sh "$PWD/source"
 
 - `0001-android-config-and-endpoints.patch`：Android 包名/versionCode；统一 API、WebSocket、附件和站点链接的 URL 读取、校验与尾斜杠处理，并增加 URL 测试。
 - `0002-android-action-menus-and-icons.patch`：Android 多选项菜单（含取消、返回键、禁用项及危险操作样式），保留 iOS 原生菜单；把导航中的 SF Symbols 映射到 Android 可显示的 Material Icons。
+- `0003-runtime-server-selection.patch`：启动配置页、设备持久化、切换时的会话隔离、动态 HTTP/WebSocket/附件/站点地址；请求使用真实 Android/iOS 系统标记。
 
 升级时在新的独立 checkout 上依次尝试补丁，解决冲突并重新导出 diff，然后更新 `UPSTREAM_REF`。不要直接忽略失败的补丁。CI 执行移动端 typecheck、lint、test 后再生成 Android 工程并运行 Gradle `assembleRelease`。
 
