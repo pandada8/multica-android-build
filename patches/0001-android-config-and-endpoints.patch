@@ -1,5 +1,5 @@
 diff --git a/apps/mobile/app.config.ts b/apps/mobile/app.config.ts
-index 9087c499e..75748a2dc 100644
+index 9087c499e..77765df85 100644
 --- a/apps/mobile/app.config.ts
 +++ b/apps/mobile/app.config.ts
 @@ -32,6 +32,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
@@ -13,6 +13,18 @@ index 9087c499e..75748a2dc 100644
      ios: {
        // Expo keeps the top-level portrait policy for iPhone while adding all
        // iPad orientations required for multitasking when tablet support is on.
+@@ -83,6 +87,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
+       [
+         "expo-build-properties",
+         {
++          android: {
++            usesCleartextTraffic: /^http:/i.test(
++              process.env.EXPO_PUBLIC_API_URL?.trim() ?? "",
++            ),
++          },
+           ios: {
+             buildReactNativeFromSource: true,
+           },
 diff --git a/apps/mobile/app/(app)/[workspace]/inbox/[id].tsx b/apps/mobile/app/(app)/[workspace]/inbox/[id].tsx
 index 108143107..08b5e1f3e 100644
 --- a/apps/mobile/app/(app)/[workspace]/inbox/[id].tsx
@@ -184,10 +196,10 @@ index c22f33fad..4859efcdc 100644
    baseUrl: string,
 diff --git a/apps/mobile/lib/server-config.test.ts b/apps/mobile/lib/server-config.test.ts
 new file mode 100644
-index 000000000..936618b46
+index 000000000..5aa2d48e0
 --- /dev/null
 +++ b/apps/mobile/lib/server-config.test.ts
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,43 @@
 +// @vitest-environment node
 +import { afterEach, describe, expect, it, vi } from "vitest";
 +
@@ -211,6 +223,9 @@ index 000000000..936618b46
 +    );
 +    expect(value.API_URL).toBe("https://api.example.test");
 +    expect(value.SITE_URL).toBe("https://site.example.test/base");
++  });
++  it("accepts an HTTP API for a self-hosted server", async () => {
++    expect((await config("http://192.168.1.10:8080/")).API_URL).toBe("http://192.168.1.10:8080");
 +  });
 +  it.each([
 +    undefined,

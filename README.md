@@ -14,7 +14,7 @@
 | `MULTICA_SITE_URL` | `https://multica.ai` | 分享、复制和打开网页使用的站点地址 |
 | `ANDROID_PACKAGE` | `ai.multica.mobile.android` | Android application ID |
 
-手动运行时可以覆盖这三个值。地址必须是 HTTPS，不包含账号密码、查询参数或 fragment；结尾斜杠会被去掉。API 和站点地址可以不同，都会编译进 APK，**不是秘密，也不能在安装后修改**；改地址后需重新构建。这里的 site URL 对应上游变量 `EXPO_PUBLIC_WEB_URL`。设置 `EXPO_NO_DOTENV=1`，避免上游 `.env.production` 覆盖定制配置。
+手动运行时可以覆盖这三个值。地址支持 HTTP/HTTPS，不包含账号密码、查询参数或 fragment；结尾斜杠会被去掉。配置 HTTP API 时，Android 构建会开启明文网络访问以支持局域网自建服务；其他构建保持关闭。API 和站点地址可以不同，都会编译进 APK，**不是秘密，也不能在安装后修改**；改地址后需重新构建。这里的 site URL 对应上游变量 `EXPO_PUBLIC_WEB_URL`。设置 `EXPO_NO_DOTENV=1`，避免上游 `.env.production` 覆盖定制配置。
 
 上游当前为公开仓库，无需额外 token。若改为私有 fork，设置只具备该仓库读取权限的 `UPSTREAM_READ_TOKEN` secret；fork PR 无法读取这个 secret。
 
