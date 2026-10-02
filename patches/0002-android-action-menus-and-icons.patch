@@ -1,0 +1,405 @@
+diff --git a/apps/mobile/AGENTS.md b/apps/mobile/AGENTS.md
+index 8fcc8391c..de096ef32 100644
+--- a/apps/mobile/AGENTS.md
++++ b/apps/mobile/AGENTS.md
+@@ -22,6 +22,8 @@ These rules apply only to `apps/mobile/`, in addition to the [root instructions]
+ 
+ - Inspect existing rows, pickers, forms, and domain visuals before adding components. Extend a suitable existing pattern; do not rewrite a domain component merely because a new feature uses it.
+ - For a new interaction, prefer a native iOS/RN API, then an RNR component. If neither fits, compose existing primitives inline for a local need. A new generic primitive requires at least three callers and no suitable native/RNR alternative; clarify unresolved interaction requirements before inventing one.
++- Android action menus use `showActionSheet` from `lib/action-sheet.tsx`; its host is mounted in the root layout. Keep iOS menus native. Android Alert supports at most three buttons, so do not use it for longer action lists.
++- Navigation SF Symbols use `components/ui/platform-image.tsx` to supply Android icons; add a mapping when introducing a new symbol.
+ - Native examples: `Alert.prompt` for text prompts, `Alert.alert` for confirmation, `ActionSheetIOS` for action menus, existing native date/media/document pickers, `Share.share`, and `expo-haptics`.
+ - Add RNR components with `npx @react-native-reusables/cli@latest add <name>`. Review generated changes and preserve local customizations. Keep default variants/spacing unless a concrete product need requires changes.
+ - Generic primitives live in `components/ui/`; domain compositions live in `components/<domain>/`. Use the existing `cn()` in `lib/utils.ts` and semantic tokens.
+diff --git a/apps/mobile/app/(app)/[workspace]/(tabs)/_layout.tsx b/apps/mobile/app/(app)/[workspace]/(tabs)/_layout.tsx
+index 4f178ed62..54588007b 100644
+--- a/apps/mobile/app/(app)/[workspace]/(tabs)/_layout.tsx
++++ b/apps/mobile/app/(app)/[workspace]/(tabs)/_layout.tsx
+@@ -22,7 +22,7 @@
+  */
+ import { useRef } from "react";
+ import { Tabs } from "expo-router";
+-import { Image } from "expo-image";
++import { Image } from "@/components/ui/platform-image";
+ import { View } from "react-native";
+ import type { TriggerRef } from "@rn-primitives/dropdown-menu";
+ import { useWorkspaceStore } from "@/data/workspace-store";
+diff --git a/apps/mobile/app/(app)/[workspace]/(tabs)/inbox.tsx b/apps/mobile/app/(app)/[workspace]/(tabs)/inbox.tsx
+index 12b48b937..4d658a718 100644
+--- a/apps/mobile/app/(app)/[workspace]/(tabs)/inbox.tsx
++++ b/apps/mobile/app/(app)/[workspace]/(tabs)/inbox.tsx
+@@ -1,6 +1,6 @@
++import { showActionSheet } from "@/lib/action-sheet";
+ import { useMemo } from "react";
+ import {
+-  ActionSheetIOS,
+   Alert,
+   FlatList,
+   View,
+@@ -79,7 +79,7 @@ export default function Inbox() {
+       t("actions.archive_completed"),
+       t("actions.archive_all"),
+     ];
+-    ActionSheetIOS.showActionSheetWithOptions(
++    showActionSheet(
+       {
+         options,
+         cancelButtonIndex: 0,
+diff --git a/apps/mobile/app/(app)/[workspace]/issue/[id].tsx b/apps/mobile/app/(app)/[workspace]/issue/[id].tsx
+index 3c0fd96c5..e1009b640 100644
+--- a/apps/mobile/app/(app)/[workspace]/issue/[id].tsx
++++ b/apps/mobile/app/(app)/[workspace]/issue/[id].tsx
+@@ -1,3 +1,4 @@
++import { showActionSheet } from "@/lib/action-sheet";
+ import { SITE_URL } from "@/lib/server-config";
+ /**
+  * Issue detail screen.
+@@ -13,7 +14,6 @@ import { SITE_URL } from "@/lib/server-config";
+  */
+ import { useCallback, useEffect } from "react";
+ import {
+-  ActionSheetIOS,
+   ActivityIndicator,
+   Alert,
+   Linking,
+@@ -141,7 +141,7 @@ export default function IssueDetail() {
+                   : t("menu.delete_issue"),
+     );
+     const destructiveIndex = options.length - 1;
+-    ActionSheetIOS.showActionSheetWithOptions(
++    showActionSheet(
+       {
+         options,
+         cancelButtonIndex: 0,
+diff --git a/apps/mobile/app/(app)/[workspace]/more/settings/profile.tsx b/apps/mobile/app/(app)/[workspace]/more/settings/profile.tsx
+index 7d4571401..dd4bc3e75 100644
+--- a/apps/mobile/app/(app)/[workspace]/more/settings/profile.tsx
++++ b/apps/mobile/app/(app)/[workspace]/more/settings/profile.tsx
+@@ -1,3 +1,4 @@
++import { showActionSheet } from "@/lib/action-sheet";
+ /**
+  * Profile edit subscreen — name + avatar.
+  *
+@@ -12,7 +13,6 @@
+  */
+ import { useEffect, useState } from "react";
+ import {
+-  ActionSheetIOS,
+   Alert,
+   ActivityIndicator,
+   Pressable,
+@@ -76,7 +76,7 @@ export default function ProfileSettingsScreen() {
+             : t("common:actions.cancel"),
+     );
+ 
+-    ActionSheetIOS.showActionSheetWithOptions(
++    showActionSheet(
+       {
+         options: visibleOptions,
+         cancelButtonIndex: cancelIndex,
+diff --git a/apps/mobile/app/(app)/[workspace]/project/[id].tsx b/apps/mobile/app/(app)/[workspace]/project/[id].tsx
+index cf5fbcdc5..0f96a645a 100644
+--- a/apps/mobile/app/(app)/[workspace]/project/[id].tsx
++++ b/apps/mobile/app/(app)/[workspace]/project/[id].tsx
+@@ -1,3 +1,4 @@
++import { showActionSheet } from "@/lib/action-sheet";
+ import { SITE_URL } from "@/lib/server-config";
+ /**
+  * Project detail screen. Single column, scrolling:
+@@ -16,7 +17,6 @@ import { SITE_URL } from "@/lib/server-config";
+  */
+ import { useCallback } from "react";
+ import {
+-  ActionSheetIOS,
+   ActivityIndicator,
+   Alert,
+   Linking,
+@@ -107,7 +107,7 @@ export default function ProjectDetail() {
+                 : t("common:actions.delete"),
+     );
+     const destructiveIndex = options.length - 1;
+-    ActionSheetIOS.showActionSheetWithOptions(
++    showActionSheet(
+       {
+         options,
+         cancelButtonIndex: 0,
+diff --git a/apps/mobile/app/(app)/[workspace]/switch-workspace.tsx b/apps/mobile/app/(app)/[workspace]/switch-workspace.tsx
+index bbc9ed914..1eea36554 100644
+--- a/apps/mobile/app/(app)/[workspace]/switch-workspace.tsx
++++ b/apps/mobile/app/(app)/[workspace]/switch-workspace.tsx
+@@ -25,7 +25,7 @@ import {
+   ScrollView,
+   View,
+ } from "react-native";
+-import { Image as ExpoImage } from "expo-image";
++import { Image as ExpoImage } from "@/components/ui/platform-image";
+ import { router } from "expo-router";
+ import { useQuery } from "@tanstack/react-query";
+ import type { Workspace } from "@multica/core/types";
+diff --git a/apps/mobile/app/_layout.tsx b/apps/mobile/app/_layout.tsx
+index bad1480a5..b24f161ae 100644
+--- a/apps/mobile/app/_layout.tsx
++++ b/apps/mobile/app/_layout.tsx
+@@ -1,3 +1,4 @@
++import { AndroidActionSheetHost } from "@/lib/action-sheet";
+ import "../global.css";
+ 
+ import { useEffect, useRef } from "react";
+@@ -95,6 +96,7 @@ export default function RootLayout() {
+                         <Stack.Screen name="(app)" />
+                       </Stack>
+                       <PortalHost />
++                      <AndroidActionSheetHost />
+                     </LightboxProvider>
+                   </SessionActivityBoundary>
+                 </AuthInitializer>
+diff --git a/apps/mobile/components/chat/message-long-press.tsx b/apps/mobile/components/chat/message-long-press.tsx
+index d2e4081b6..4874c3f97 100644
+--- a/apps/mobile/components/chat/message-long-press.tsx
++++ b/apps/mobile/components/chat/message-long-press.tsx
+@@ -1,3 +1,4 @@
++import { showActionSheet } from "@/lib/action-sheet";
+ /**
+  * Long-press handler for a chat message bubble. Exposes `onLongPress`
+  * (drives a native iOS ActionSheetIOS) and `isPressed` (drives the
+@@ -16,7 +17,7 @@
+  * native alternative" threshold in apps/mobile/CLAUDE.md.
+  */
+ import { useCallback, useState } from "react";
+-import { ActionSheetIOS } from "react-native";
++
+ import * as Clipboard from "expo-clipboard";
+ import * as Haptics from "expo-haptics";
+ import type { ChatMessage } from "@multica/core/types";
+@@ -55,7 +56,7 @@ export function useChatMessageLongPress(
+ 
+     const cancelButtonIndex = options.length - 1;
+ 
+-    ActionSheetIOS.showActionSheetWithOptions(
++    showActionSheet(
+       { options, cancelButtonIndex },
+       (i) => {
+         setIsPressed(false);
+diff --git a/apps/mobile/components/issue/comment-context-menu.tsx b/apps/mobile/components/issue/comment-context-menu.tsx
+index 2e8c70129..4a0b7846a 100644
+--- a/apps/mobile/components/issue/comment-context-menu.tsx
++++ b/apps/mobile/components/issue/comment-context-menu.tsx
+@@ -1,3 +1,4 @@
++import { showActionSheet } from "@/lib/action-sheet";
+ import { SITE_URL } from "@/lib/server-config";
+ /**
+  * Long-press handler for a comment bubble. Exposes `onLongPress` (drives a
+@@ -19,7 +20,7 @@ import { SITE_URL } from "@/lib/server-config";
+  * first is still dismissing — the callback runs after dismissal completes.
+  */
+ import { useCallback, useState } from "react";
+-import { ActionSheetIOS, Alert } from "react-native";
++import { Alert } from "react-native";
+ import { router } from "expo-router";
+ import * as Clipboard from "expo-clipboard";
+ import * as Haptics from "expo-haptics";
+@@ -111,7 +112,7 @@ export function useCommentLongPress(
+       ? actions.findIndex((a) => a.kind === "delete")
+       : undefined;
+ 
+-    ActionSheetIOS.showActionSheetWithOptions(
++    showActionSheet(
+       {
+         options,
+         cancelButtonIndex,
+@@ -242,7 +243,7 @@ function presentReactSheet(args: {
+   ];
+   const cancelButtonIndex = options.length - 1;
+ 
+-  ActionSheetIOS.showActionSheetWithOptions(
++  showActionSheet(
+     { options, cancelButtonIndex },
+     (i) => {
+       if (i === cancelButtonIndex) return;
+diff --git a/apps/mobile/components/nav/more-tab-dropdown.tsx b/apps/mobile/components/nav/more-tab-dropdown.tsx
+index c2f231d88..998403a7c 100644
+--- a/apps/mobile/components/nav/more-tab-dropdown.tsx
++++ b/apps/mobile/components/nav/more-tab-dropdown.tsx
+@@ -36,7 +36,7 @@
+  */
+ import { useMemo } from "react";
+ import { Image, Pressable, View } from "react-native";
+-import { Image as ExpoImage } from "expo-image";
++import { Image as ExpoImage } from "@/components/ui/platform-image";
+ import { router, usePathname } from "expo-router";
+ import { useQuery } from "@tanstack/react-query";
+ import { useSafeAreaInsets } from "react-native-safe-area-context";
+diff --git a/apps/mobile/components/ui/platform-image.tsx b/apps/mobile/components/ui/platform-image.tsx
+new file mode 100644
+index 000000000..d3c80674f
+--- /dev/null
++++ b/apps/mobile/components/ui/platform-image.tsx
+@@ -0,0 +1,38 @@
++import { Image as ExpoImage, type ImageProps } from "expo-image";
++import { MaterialIcons } from "@expo/vector-icons";
++import { Platform, StyleSheet } from "react-native";
++import type { ComponentProps } from "react";
++
++const symbols: Record<string, ComponentProps<typeof MaterialIcons>["name"]> = {
++  tray: "inbox",
++  "tray.fill": "inbox",
++  checklist: "checklist",
++  "checklist.unchecked": "checklist",
++  "bubble.left": "chat-bubble-outline",
++  "bubble.left.fill": "chat-bubble",
++  ellipsis: "more-horiz",
++  checkmark: "check",
++  "chevron.right": "chevron-right",
++  pin: "push-pin",
++  "list.bullet": "list",
++  "square.stack": "folder",
++};
++export function Image(props: ImageProps) {
++  if (
++    Platform.OS !== "ios" &&
++    typeof props.source === "string" &&
++    props.source.startsWith("sf:")
++  ) {
++    const style = StyleSheet.flatten(props.style);
++    return (
++      <MaterialIcons
++        name={symbols[props.source.slice(3)] ?? "help-outline"}
++        size={typeof style?.width === "number" ? style.width : 24}
++        color={props.tintColor ?? undefined}
++        style={props.style}
++        accessibilityLabel={props.accessibilityLabel}
++      />
++    );
++  }
++  return <ExpoImage {...props} />;
++}
+diff --git a/apps/mobile/lib/action-sheet.tsx b/apps/mobile/lib/action-sheet.tsx
+new file mode 100644
+index 000000000..162cc4ee2
+--- /dev/null
++++ b/apps/mobile/lib/action-sheet.tsx
+@@ -0,0 +1,124 @@
++import { useSyncExternalStore } from "react";
++import {
++  ActionSheetIOS,
++  Modal,
++  Platform,
++  Pressable,
++  ScrollView,
++  Text,
++  View,
++} from "react-native";
++import type { ActionSheetIOSOptions } from "react-native";
++import { useColorScheme } from "@/lib/use-color-scheme";
++import { THEME } from "@/lib/theme";
++
++type Sheet = {
++  options: ActionSheetIOSOptions;
++  callback: (index: number) => void;
++};
++let current: Sheet | null = null;
++const listeners = new Set<() => void>();
++function emit() {
++  listeners.forEach((listener) => listener());
++}
++function finish(index: number) {
++  const sheet = current;
++  current = null;
++  emit();
++  sheet?.callback(index);
++}
++export function showActionSheet(
++  options: ActionSheetIOSOptions,
++  callback: (index: number) => void,
++) {
++  if (Platform.OS === "ios") {
++    ActionSheetIOS.showActionSheetWithOptions(options, callback);
++    return;
++  }
++  if (current) finish(current.options.cancelButtonIndex ?? -1);
++  current = { options, callback };
++  emit();
++}
++function subscribe(listener: () => void) {
++  listeners.add(listener);
++  return () => {
++    listeners.delete(listener);
++  };
++}
++export function AndroidActionSheetHost() {
++  const sheet = useSyncExternalStore(subscribe, () => current);
++  const { colorScheme } = useColorScheme();
++  const theme = THEME[colorScheme];
++  if (!sheet) return null;
++  const cancel = () => finish(sheet.options.cancelButtonIndex ?? -1);
++  const destructive = sheet.options.destructiveButtonIndex;
++  return (
++    <Modal transparent visible animationType="fade" onRequestClose={cancel}>
++      <View style={{ flex: 1, justifyContent: "center", padding: 24 }}>
++        <Pressable
++          accessibilityLabel={
++            sheet.options.options[sheet.options.cancelButtonIndex ?? -1]
++          }
++          onPress={cancel}
++          style={{
++            position: "absolute",
++            top: 0,
++            left: 0,
++            right: 0,
++            bottom: 0,
++            backgroundColor: "rgba(0,0,0,0.5)",
++          }}
++        />
++        <View
++          accessibilityViewIsModal
++          style={{
++            backgroundColor: theme.background,
++            borderRadius: 12,
++            maxHeight: "80%",
++          }}
++        >
++          {sheet.options.title ? (
++            <Text style={{ color: theme.foreground, padding: 16 }}>
++              {sheet.options.title}
++            </Text>
++          ) : null}
++          {sheet.options.message ? (
++            <Text style={{ color: theme.foreground, padding: 16 }}>
++              {sheet.options.message}
++            </Text>
++          ) : null}
++          <ScrollView>
++            {sheet.options.options.map((label, index) => (
++              <Pressable
++                key={index}
++                accessibilityRole="button"
++                disabled={sheet.options.disabledButtonIndices?.includes(index)}
++                onPress={() => finish(index)}
++                style={{
++                  padding: 18,
++                  opacity: sheet.options.disabledButtonIndices?.includes(index)
++                    ? 0.4
++                    : 1,
++                }}
++              >
++                <Text
++                  style={{
++                    color: (
++                      Array.isArray(destructive)
++                        ? destructive.includes(index)
++                        : destructive === index
++                    )
++                      ? theme.destructive
++                      : theme.foreground,
++                  }}
++                >
++                  {label}
++                </Text>
++              </Pressable>
++            ))}
++          </ScrollView>
++        </View>
++      </View>
++    </Modal>
++  );
++}

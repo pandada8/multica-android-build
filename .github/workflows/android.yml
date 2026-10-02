@@ -1,0 +1,79 @@
+name: Android APK
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: API HTTPS URL (no /api suffix)
+        type: string
+      site_url:
+        description: Multica site HTTPS URL
+        type: string
+      android_package:
+        description: Android application ID
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      EXPO_PUBLIC_API_URL: ${{ inputs.api_url || vars.MULTICA_API_URL || 'https://api.multica.ai' }}
+      EXPO_PUBLIC_WEB_URL: ${{ inputs.site_url || vars.MULTICA_SITE_URL || 'https://multica.ai' }}
+      ANDROID_PACKAGE: ${{ inputs.android_package || vars.ANDROID_PACKAGE || 'ai.multica.mobile.android' }}
+      ANDROID_VERSION_CODE: ${{ github.run_number }}
+      EXPO_NO_DOTENV: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pinned upstream
+        id: upstream
+        run: |
+          source upstream.env
+          echo "repository=$UPSTREAM_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.upstream.outputs.ref }}
+          path: source
+          token: ${{ secrets.UPSTREAM_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Apply downstream patches
+        run: scripts/apply-patches.sh "$GITHUB_WORKSPACE/source"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install dependencies
+        working-directory: source
+        run: pnpm install --frozen-lockfile --filter @multica/mobile...
+      - name: Verify mobile
+        working-directory: source
+        run: |
+          pnpm --filter @multica/mobile typecheck
+          pnpm --filter @multica/mobile lint
+          pnpm --filter @multica/mobile test
+      - name: Build standalone APK
+        run: scripts/build-android.sh "$GITHUB_WORKSPACE/source"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multica-android-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
