@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       api_url:
-        description: API HTTPS URL (no /api suffix)
+        description: API URL (no /api suffix)
         type: string
       site_url:
-        description: Multica site HTTPS URL
+        description: Multica site URL
         type: string
       android_package:
         description: Android application ID

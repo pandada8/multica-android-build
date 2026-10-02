@@ -10,8 +10,8 @@ export APP_ENV=production NODE_ENV=production CI=1 EXPO_NO_DOTENV=1
 node <<'JS'
 for (const name of ['EXPO_PUBLIC_API_URL', 'EXPO_PUBLIC_WEB_URL']) {
   const url = new URL(process.env[name]);
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
-    throw new Error(`${name} must be an HTTPS URL without credentials, query or fragment`);
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error(`${name} must be an HTTP(S) URL without credentials, query or fragment`);
   }
 }
 if (!/^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(process.env.ANDROID_PACKAGE)) throw new Error('Invalid ANDROID_PACKAGE');
