@@ -1,0 +1,38 @@
+diff --git a/apps/mobile/app.config.ts b/apps/mobile/app.config.ts
+index be5b3c37f..936a2d3e6 100644
+--- a/apps/mobile/app.config.ts
++++ b/apps/mobile/app.config.ts
+@@ -67,6 +67,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
+           : (process.env.EXPO_BUNDLE_IDENTIFIER_DEV ?? "ai.multica.mobile.dev"),
+     },
+     plugins: [
++      "./plugins/with-fbjni-version.cjs",
+       "expo-router",
+       "expo-secure-store",
+       "@react-native-community/datetimepicker",
+diff --git a/apps/mobile/plugins/with-fbjni-version.cjs b/apps/mobile/plugins/with-fbjni-version.cjs
+new file mode 100644
+index 000000000..3e76fca2d
+--- /dev/null
++++ b/apps/mobile/plugins/with-fbjni-version.cjs
+@@ -0,0 +1,20 @@
++const { withProjectBuildGradle } = require("expo/config-plugins");
++
++// Match React Native 0.83.6's native runtime. Shiki requests fbjni:+, which
++// otherwise selects a newer binary requiring symbols absent from RN's libc++.
++module.exports = function withFbjniVersion(config) {
++  return withProjectBuildGradle(config, (config) => {
++    const marker = "// Multica: align fbjni with React Native";
++    if (!config.modResults.contents.includes(marker)) {
++      config.modResults.contents += `
++${marker}
++allprojects {
++  configurations.configureEach {
++    resolutionStrategy.force 'com.facebook.fbjni:fbjni:0.7.0'
++  }
++}
++`;
++    }
++    return config;
++  });
++};
