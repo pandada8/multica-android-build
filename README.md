@@ -67,6 +67,7 @@ scripts/build-android.sh "$PWD/source"
 - `0001-android-config-and-endpoints.patch`：Android 包名/versionCode；统一 API、WebSocket、附件和站点链接的 URL 读取、校验与尾斜杠处理，并增加 URL 测试。
 - `0002-android-action-menus-and-icons.patch`：Android 多选项菜单（含取消、返回键、禁用项及危险操作样式），保留 iOS 原生菜单；把导航中的 SF Symbols 映射到 Android 可显示的 Material Icons。
 - `0003-runtime-server-selection.patch`：启动配置页、设备持久化、切换时的会话隔离、动态 HTTP/WebSocket/附件/站点地址；请求使用真实 Android/iOS 系统标记。
+- `0004-align-fbjni-runtime.patch`：通过 Expo config plugin 将 fbjni 固定为当前 React Native 使用的 0.7.0，防止 Shiki 的动态依赖升级到不兼容的 C++ 运行库版本而导致启动闪退。升级 React Native 时需同步核对该版本。
 
 升级时在新的独立 checkout 上依次尝试补丁，解决冲突并重新导出 diff，然后更新 `UPSTREAM_REF`。不要直接忽略失败的补丁。CI 执行移动端 typecheck、lint、test 后再生成 Android 工程并运行 Gradle `assembleRelease`。
 
