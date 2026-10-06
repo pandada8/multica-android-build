@@ -4,7 +4,7 @@
 
 ## 启动时配置服务器
 
-每次冷启动先显示服务器配置页，可以输入 **API URL** 和 **Multica 站点 URL**，点击“继续”后才启动登录、API 请求及 WebSocket。地址保存在设备的 SecureStore 中，下次启动自动填入；登录页也提供“更换服务器”入口。
+冷启动先加载设备保存的服务器地址，再检查登录态。已有有效登录时直接进入应用，不再展示服务器配置页；未登录或登录已失效时展示配置页，可输入 **API URL** 和 **Multica 站点 URL**。检查期间显示加载指示器，不会先向默认 host 发送旧 token。登录页提供“更换服务器”入口；已登录用户需要先在设置中主动退出登录，再切换 host。
 
 同一服务器保留登录。更换任一地址时先清除旧 token、工作区及查询缓存，随后才启用新地址，避免把旧凭据发送到新服务器。首次升级到这套配置时会重新登录一次。地址支持 HTTP/HTTPS，拒绝账号密码、查询参数、fragment 和空地址，并规范化尾斜杠。为了支持启动时选择局域网 HTTP 服务，Android APK 允许明文流量，选择 HTTP API 时界面会显示提示。英文和简体中文界面均已适配。
 
@@ -67,6 +67,7 @@ scripts/build-android.sh "$PWD/source"
 - `0001-android-config-and-endpoints.patch`：Android 包名/versionCode；统一 API、WebSocket、附件和站点链接的 URL 读取、校验与尾斜杠处理，并增加 URL 测试。
 - `0002-android-action-menus-and-icons.patch`：Android 多选项菜单（含取消、返回键、禁用项及危险操作样式），保留 iOS 原生菜单；把导航中的 SF Symbols 映射到 Android 可显示的 Material Icons。
 - `0003-runtime-server-selection.patch`：启动配置页、设备持久化、切换时的会话隔离、动态 HTTP/WebSocket/附件/站点地址；请求使用真实 Android/iOS 系统标记。
+- `0005-session-aware-server-gate.patch`：恢复已保存的服务器后检查登录态，已登录时跳过配置页；限制已登录会话切换 host。
 - `0004-align-fbjni-runtime.patch`：通过 Expo config plugin 将 fbjni 固定为当前 React Native 使用的 0.7.0，防止 Shiki 的动态依赖升级到不兼容的 C++ 运行库版本而导致启动闪退。升级 React Native 时需同步核对该版本。
 
 升级时在新的独立 checkout 上依次尝试补丁，解决冲突并重新导出 diff，然后更新 `UPSTREAM_REF`。不要直接忽略失败的补丁。CI 执行移动端 typecheck、lint、test 后再生成 Android 工程并运行 Gradle `assembleRelease`。

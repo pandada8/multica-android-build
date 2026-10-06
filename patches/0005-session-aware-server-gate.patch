@@ -1,0 +1,217 @@
+diff --git a/apps/mobile/AGENTS.md b/apps/mobile/AGENTS.md
+index 7eb71475a..7262da499 100644
+--- a/apps/mobile/AGENTS.md
++++ b/apps/mobile/AGENTS.md
+@@ -95,5 +95,5 @@ pnpm --filter @multica/mobile test
+ 
+ ## Downstream server selection
+ 
+-- `ServerGate` must stay outside `AuthInitializer`: no auth/network consumers mount before the user chooses a server.
++- `ServerGate` must stay outside `AuthInitializer`: saved endpoints must be restored before probing auth, and no authenticated consumers mount before that probe settles. Signed-in users bypass the configuration form; changing servers requires signing out first.
+ - Server changes go through `data/server-settings.ts`, which clears credentials and caches before updating the live endpoints. Do not capture API/site URLs at module initialization.
+diff --git a/apps/mobile/app/_layout.tsx b/apps/mobile/app/_layout.tsx
+index eb0d5bfc0..d0d4df2b8 100644
+--- a/apps/mobile/app/_layout.tsx
++++ b/apps/mobile/app/_layout.tsx
+@@ -60,7 +60,12 @@ function AuthInitializer({ children }: { children: React.ReactNode }) {
+     // Launch check for the sliding session (MUL-7436). Runs after the token
+     // is restored and the identity probe has settled, so it never races the
+     // first getMe(); a no-op when there is no session to extend.
+-    void initialize().then(() => maybeRenewSession());
++    // ServerGate already probes saved sessions before mounting this tree.
++    if (useAuthStore.getState().isLoading) {
++      void initialize().then(() => maybeRenewSession());
++    } else {
++      void maybeRenewSession();
++    }
+   }, [initialize, qc]);
+ 
+   // Foreground transitions are one of the two "someone is using this" signals;
+diff --git a/apps/mobile/components/auth/server-gate.tsx b/apps/mobile/components/auth/server-gate.tsx
+index ba63b82ca..a5c011ce4 100644
+--- a/apps/mobile/components/auth/server-gate.tsx
++++ b/apps/mobile/components/auth/server-gate.tsx
+@@ -6,7 +6,13 @@ import {
+   useState,
+   type ReactNode,
+ } from "react";
+-import { KeyboardAvoidingView, Platform, ScrollView, View } from "react-native";
++import {
++  ActivityIndicator,
++  KeyboardAvoidingView,
++  Platform,
++  ScrollView,
++  View,
++} from "react-native";
+ import { SafeAreaView } from "react-native-safe-area-context";
+ import { Text } from "@/components/ui/text";
+ import { TextField } from "@/components/ui/text-field";
+@@ -17,7 +23,9 @@ import {
+   DEFAULT_SERVER_CONFIG,
+   normalizeServerConfig,
+ } from "@/lib/server-config";
+-import { connectServer, loadServerSettings } from "@/data/server-settings";
++import { connectServer, restoreServerSession } from "@/data/server-settings";
++
++import { useAuthStore } from "@/data/auth-store";
+ 
+ const ServerSettingsContext = createContext(() => {});
+ export const useServerSettings = () => useContext(ServerSettingsContext);
+@@ -34,12 +42,13 @@ export function ServerGate({ children }: { children: ReactNode }) {
+ 
+   useEffect(() => {
+     let active = true;
+-    void loadServerSettings()
++    void restoreServerSession()
+       .then((saved) => {
+         if (!active) return;
+         if (saved) {
+           setApiUrl(saved.apiUrl);
+           setSiteUrl(saved.siteUrl);
++          setReady(!!useAuthStore.getState().user);
+         }
+       })
+       .catch(() => {
+@@ -78,8 +87,20 @@ export function ServerGate({ children }: { children: ReactNode }) {
+     }
+   };
+ 
++  if (!loaded && !error) {
++    return (
++      <View className="flex-1 items-center justify-center bg-background">
++        <ActivityIndicator />
++      </View>
++    );
++  }
++
+   return (
+-    <ServerSettingsContext.Provider value={() => setReady(false)}>
++    <ServerSettingsContext.Provider
++      value={() => {
++        if (!useAuthStore.getState().user) setReady(false);
++      }}
++    >
+       {ready ? (
+         children
+       ) : (
+diff --git a/apps/mobile/data/server-settings.test.ts b/apps/mobile/data/server-settings.test.ts
+index 01d21c226..df27b14af 100644
+--- a/apps/mobile/data/server-settings.test.ts
++++ b/apps/mobile/data/server-settings.test.ts
+@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => {
+   process.env.EXPO_PUBLIC_API_URL = "https://old.example.test";
+   process.env.EXPO_PUBLIC_WEB_URL = "https://old-site.example.test";
+   return {
++    user: null as { id: string } | null,
++    initialize: vi.fn(),
+     get: vi.fn(),
+     save: vi.fn(),
+     logout: vi.fn(),
+@@ -20,7 +22,7 @@ vi.mock("expo-secure-store", () => ({
+ vi.mock("./auth-store", () => ({
+   useAuthStore: {
+     setState: vi.fn(),
+-    getState: () => ({ logout: mocks.logout }),
++    getState: () => ({ logout: mocks.logout, initialize: mocks.initialize, user: mocks.user }),
+   },
+ }));
+ vi.mock("./workspace-store", () => ({
+@@ -32,7 +34,7 @@ vi.mock("./query-client", () => ({
+     clear: mocks.clearQueries,
+   },
+ }));
+-import { connectServer, loadServerSettings } from "./server-settings";
++import { connectServer, loadServerSettings, restoreServerSession } from "./server-settings";
+ import { API_URL, SITE_URL, setServerConfig } from "@/lib/server-config";
+ const old = {
+   apiUrl: "https://old.example.test",
+@@ -44,6 +46,7 @@ const next = {
+ };
+ beforeEach(() => {
+   vi.resetAllMocks();
++  mocks.user = null;
+   mocks.get.mockResolvedValue(JSON.stringify(old));
+   setServerConfig(old);
+ });
+@@ -115,3 +118,30 @@ describe("startup server selection", () => {
+     expect(mocks.save).not.toHaveBeenCalled();
+   });
+ });
++
++describe("restoring a saved session", () => {
++  it("sets saved endpoints before checking auth and preserves the credential", async () => {
++    setServerConfig(next);
++    mocks.initialize.mockImplementation(async () => {
++      expect(API_URL).toBe(old.apiUrl);
++      expect(SITE_URL).toBe(old.siteUrl);
++      mocks.user = { id: "signed-in" };
++    });
++    expect(await restoreServerSession()).toEqual(old);
++    expect(mocks.user).toEqual({ id: "signed-in" });
++    expect(mocks.logout).not.toHaveBeenCalled();
++    expect(mocks.save).not.toHaveBeenCalled();
++  });
++  it.each([null, "bad json"])("does not probe unbound credentials: %s", async (saved) => {
++    mocks.get.mockResolvedValue(saved);
++    expect(await restoreServerSession()).toBeNull();
++    expect(mocks.initialize).not.toHaveBeenCalled();
++  });
++  it("requires sign-out before switching a logged-in session", async () => {
++    mocks.user = { id: "signed-in" };
++    await expect(connectServer(next)).rejects.toThrow("Sign out");
++    expect(API_URL).toBe(old.apiUrl);
++    expect(mocks.logout).not.toHaveBeenCalled();
++    expect(mocks.save).not.toHaveBeenCalled();
++  });
++});
+diff --git a/apps/mobile/data/server-settings.ts b/apps/mobile/data/server-settings.ts
+index 3b4c66ddb..d728279eb 100644
+--- a/apps/mobile/data/server-settings.ts
++++ b/apps/mobile/data/server-settings.ts
+@@ -19,8 +19,20 @@ export async function loadServerSettings(): Promise<ServerConfig | null> {
+   }
+ }
+ 
++/** Restore endpoints before probing the session; never send a token to defaults. */
++export async function restoreServerSession(): Promise<ServerConfig | null> {
++  const saved = await loadServerSettings();
++  if (!saved) return null;
++  setServerConfig(saved);
++  await useAuthStore.getState().initialize();
++  return saved;
++}
++
+ /** No app/auth providers are mounted until this transaction succeeds. */
+ export async function connectServer(value: ServerConfig): Promise<void> {
++  if (useAuthStore.getState().user) {
++    throw new Error("Sign out before changing the server");
++  }
+   const next = normalizeServerConfig(value);
+   const previous = await loadServerSettings();
+   // An unbound (pre-settings) token must never be forwarded to a new host.
+diff --git a/apps/mobile/locales/en/auth.json b/apps/mobile/locales/en/auth.json
+index 0945ed7ac..99110608c 100644
+--- a/apps/mobile/locales/en/auth.json
++++ b/apps/mobile/locales/en/auth.json
+@@ -41,7 +41,7 @@
+     "change": "Change server",
+     "invalid_url": "Enter valid HTTP(S) URLs without credentials, query parameters or fragments.",
+     "storage_error": "Could not read or save server settings. Try again.",
+-    "session_notice": "Changing the server signs you out. Your last addresses are saved on this device.",
++    "session_notice": "Sign out before changing the server. Your last addresses are saved on this device.",
+     "http_notice": "HTTP sends credentials and data without encryption. Use only on a trusted network."
+   }
+ }
+diff --git a/apps/mobile/locales/zh-Hans/auth.json b/apps/mobile/locales/zh-Hans/auth.json
+index b843be4c9..fe9a8e92c 100644
+--- a/apps/mobile/locales/zh-Hans/auth.json
++++ b/apps/mobile/locales/zh-Hans/auth.json
+@@ -43,7 +43,7 @@
+     "change": "更换服务器",
+     "invalid_url": "请输入有效的 HTTP(S) 地址，不要包含账号密码、查询参数或片段。",
+     "storage_error": "无法读取或保存服务器设置，请重试。",
+-    "session_notice": "更换服务器会退出登录。上次使用的地址会保存在此设备上。",
++    "session_notice": "更换服务器前请先退出登录。上次使用的地址会保存在此设备上。",
+     "http_notice": "HTTP 不会加密凭据和数据，请仅在可信网络中使用。"
+   }
+ }
