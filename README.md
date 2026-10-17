@@ -75,3 +75,26 @@ scripts/build-android.sh "$PWD/source"
 升级时在新的独立 checkout 上依次尝试补丁，解决冲突并重新导出 diff，然后更新 `UPSTREAM_REF`。不要直接忽略失败的补丁。CI 执行移动端 typecheck、lint、test 后再生成 Android 工程并运行 Gradle `assembleRelease`。
 
 构建流程参考 [Expo 本地 release 构建](https://docs.expo.dev/guides/local-app-production/)。Android 菜单使用可滚动 Modal，因为 [React Native Alert](https://reactnative.dev/docs/alert) 在 Android 上最多支持三个按钮，无法容纳评论的全部操作。
+
+## iOS IPA（自行侧载）
+
+`iOS unsigned IPA` workflow 在 GitHub 标准 macOS 15 runner 上使用 Xcode 26.3 构建。与 Android 共用固定上游和全部补丁，支持相同的登录前 API/site 地址配置。push、PR 或手动运行均会触发，不需要 Apple Developer 账号、证书或 EAS token。
+
+构建完成后，在 Actions 对应运行的 Artifacts 中下载 `multica-ios-unsigned-<run_number>`，解压得到：
+
+- `multica-unsigned.ipa`：arm64 真机 Release 包，内嵌 JS bundle，无需 Metro。
+- `multica-unsigned.ipa.sha256`：SHA-256 校验值。
+- `build-info.txt`：上游版本、默认地址、bundle identifier、Xcode 版本及补丁校验值。
+
+将 IPA 导入自己的侧载工具，使用自己的 Apple 账号重新签名并安装。**此 IPA 未签名，不能直接点开安装，也不能直接上传 TestFlight/App Store。** 免费 Personal Team 的设备安装描述文件通常 7 天过期，需要重新签名；侧载工具的设备连接、开发者模式和刷新要求以该工具说明为准。无需把 Apple 账号密码提供给本仓库。
+
+默认 bundle identifier 为 `ai.multica.mobile.sideload`，可用仓库变量 `IOS_BUNDLE_IDENTIFIER` 或手动运行参数覆盖。默认 API/site 地址沿用 `MULTICA_API_URL` / `MULTICA_SITE_URL`；iOS 自定义服务建议使用 HTTPS，Android 的 HTTP 明文配置不适用于 iOS。
+
+本地需要 macOS、Xcode 26.3、CocoaPods、Node.js 22 和 pnpm 10.28.2。在独立 checkout 应用补丁并安装依赖后运行：
+
+```bash
+IOS_BUNDLE_IDENTIFIER=ai.example.multica \
+scripts/build-ios.sh /path/to/patched-upstream
+```
+
+产物写入 `artifacts/ios/`。脚本使用 device archive 并关闭签名，直接按 `Payload/*.app` 结构封装 IPA；不调用需要 provisioning profile 的 `xcodebuild -exportArchive`。首次从源码构建 React Native 较慢，CI 超时设为 120 分钟。GitHub 构建成功不代表已在真机完成侧载和交互验收。

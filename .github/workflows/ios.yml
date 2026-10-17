@@ -1,0 +1,78 @@
+name: iOS unsigned IPA
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: API URL (no /api suffix)
+        type: string
+      site_url:
+        description: Multica site URL
+        type: string
+      ios_bundle_identifier:
+        description: iOS bundle identifier
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      EXPO_PUBLIC_API_URL: ${{ inputs.api_url || vars.MULTICA_API_URL || 'https://api.multica.ai' }}
+      EXPO_PUBLIC_WEB_URL: ${{ inputs.site_url || vars.MULTICA_SITE_URL || 'https://multica.ai' }}
+      IOS_BUNDLE_IDENTIFIER: ${{ inputs.ios_bundle_identifier || vars.IOS_BUNDLE_IDENTIFIER || 'ai.multica.mobile.sideload' }}
+      IOS_BUILD_NUMBER: ${{ github.run_number }}
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      EXPO_NO_DOTENV: '1'
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read pinned upstream
+        id: upstream
+        run: |
+          source upstream.env
+          echo "repository=$UPSTREAM_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "ref=$UPSTREAM_REF" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.upstream.outputs.repository }}
+          ref: ${{ steps.upstream.outputs.ref }}
+          path: source
+          token: ${{ secrets.UPSTREAM_READ_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Apply downstream patches
+        run: scripts/apply-patches.sh "$GITHUB_WORKSPACE/source"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: source/pnpm-lock.yaml
+      - name: Show Apple toolchain
+        run: |
+          xcodebuild -version
+          pod --version
+      - name: Install dependencies
+        working-directory: source
+        run: pnpm install --frozen-lockfile --filter @multica/mobile...
+      - name: Verify mobile
+        working-directory: source
+        run: |
+          pnpm --filter @multica/mobile typecheck
+          pnpm --filter @multica/mobile lint
+          pnpm --filter @multica/mobile test
+      - name: Build unsigned device IPA
+        run: scripts/build-ios.sh "$GITHUB_WORKSPACE/source"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multica-ios-unsigned-${{ github.run_number }}
+          path: artifacts/ios/
+          if-no-files-found: error
+          retention-days: 14
