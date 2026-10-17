@@ -43,7 +43,7 @@ apps=("$build_dir/Multica.xcarchive/Products/Applications/"*.app)
 app=${apps[0]}
 [[ -s "$app/main.jsbundle" ]] || { echo 'Release JS bundle is missing' >&2; exit 1; }
 executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Info.plist")
-lipo -verify_arch arm64 "$app/$executable"
+lipo "$app/$executable" -verify_arch arm64
 # exportArchive requires provisioning. Package the unsigned device app directly.
 mkdir -p "$build_dir/package/Payload"
 ditto "$app" "$build_dir/package/Payload/$(basename "$app")"
